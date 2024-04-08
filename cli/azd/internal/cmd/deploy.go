@@ -14,6 +14,7 @@ import (
 	"github.com/azure/azure-dev/cli/azd/internal"
 	"github.com/azure/azure-dev/cli/azd/pkg/account"
 	"github.com/azure/azure-dev/cli/azd/pkg/alpha"
+	"github.com/azure/azure-dev/cli/azd/pkg/cloud"
 	"github.com/azure/azure-dev/cli/azd/pkg/environment"
 	"github.com/azure/azure-dev/cli/azd/pkg/environment/azdcontext"
 	"github.com/azure/azure-dev/cli/azd/pkg/exec"
@@ -28,7 +29,7 @@ import (
 
 type DeployFlags struct {
 	serviceName string
-	all         bool
+	All         bool
 	fromPackage string
 	global      *internal.GlobalCommandOptions
 	*internal.EnvFlag
@@ -59,7 +60,7 @@ func (d *DeployFlags) bindCommon(local *pflag.FlagSet, global *internal.GlobalCo
 	d.EnvFlag.Bind(local, global)
 
 	local.BoolVar(
-		&d.all,
+		&d.All,
 		"all",
 		false,
 		"Deploys all services that are listed in "+azdcontext.ProjectFileName,
@@ -111,6 +112,7 @@ type DeployAction struct {
 	resourceManager     project.ResourceManager
 	accountManager      account.Manager
 	azCli               azcli.AzCli
+	portalUrlBase       string
 	formatter           output.Formatter
 	writer              io.Writer
 	console             input.Console
@@ -129,6 +131,7 @@ func NewDeployAction(
 	azdCtx *azdcontext.AzdContext,
 	environment *environment.Environment,
 	accountManager account.Manager,
+	portalUrlBase cloud.PortalUrlBase,
 	azCli azcli.AzCli,
 	commandRunner exec.CommandRunner,
 	console input.Console,
@@ -147,6 +150,7 @@ func NewDeployAction(
 		serviceManager:      serviceManager,
 		resourceManager:     resourceManager,
 		accountManager:      accountManager,
+		portalUrlBase:       string(portalUrlBase),
 		azCli:               azCli,
 		formatter:           formatter,
 		writer:              writer,
@@ -183,13 +187,13 @@ func (da *DeployAction) Run(ctx context.Context) (*actions.ActionResult, error) 
 		da.projectConfig,
 		string(project.ServiceEventDeploy),
 		targetServiceName,
-		da.flags.all,
+		da.flags.All,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	if da.flags.all && da.flags.fromPackage != "" {
+	if da.flags.All && da.flags.fromPackage != "" {
 		return nil, errors.New(
 			"'--from-package' cannot be specified when '--all' is set. Specify a specific service by passing a <service>")
 	}
@@ -307,8 +311,15 @@ func (da *DeployAction) Run(ctx context.Context) (*actions.ActionResult, error) 
 
 	return &actions.ActionResult{
 		Message: &actions.ResultMessage{
-			Header:   fmt.Sprintf("Your application was deployed to Azure in %s.", ux.DurationAsText(since(startTime))),
-			FollowUp: getResourceGroupFollowUp(ctx, da.formatter, da.projectConfig, da.resourceManager, da.env, false),
+			Header: fmt.Sprintf("Your application was deployed to Azure in %s.", ux.DurationAsText(since(startTime))),
+			FollowUp: getResourceGroupFollowUp(ctx,
+				da.formatter,
+				da.portalUrlBase,
+				da.projectConfig,
+				da.resourceManager,
+				da.env,
+				false,
+			),
 		},
 	}, nil
 }

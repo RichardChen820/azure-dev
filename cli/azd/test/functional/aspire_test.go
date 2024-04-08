@@ -53,6 +53,7 @@ func restoreDotnetWorkload(t *testing.T) {
 
 // Test_CLI_Aspire_DetectGen tests the detection and generation of an Aspire project.
 func Test_CLI_Aspire_DetectGen(t *testing.T) {
+	t.Skip("depends on new aspire release")
 	restoreDotnetWorkload(t)
 
 	sn := snapshot.NewDefaultConfig().WithOptions(cupaloy.SnapshotFileExtension(""))
@@ -84,10 +85,25 @@ func Test_CLI_Aspire_DetectGen(t *testing.T) {
 		appHostProject := filepath.Join(dir, "AspireAzdTests.AppHost")
 		manifestPath := filepath.Join(appHostProject, "manifest.json")
 
-		err = dotnetCli.PublishAppHostManifest(ctx, appHostProject, manifestPath)
+		err = dotnetCli.PublishAppHostManifest(ctx, appHostProject, manifestPath, "")
 		require.NoError(t, err)
 
-		err = snapshotFile(sn, snRoot, dir, manifestPath)
+		manifestFolder := filepath.Dir(manifestPath)
+		// Snapshot every json and bicep under manifest path
+		err = filepath.WalkDir(manifestFolder, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			fileName := d.Name()
+			fileExt := filepath.Ext(fileName)
+			parentFolder := filepath.Base(filepath.Dir(path))
+			manifestFolderName := filepath.Base(manifestFolder)
+			if !d.IsDir() && parentFolder == manifestFolderName && (fileExt == ".bicep" || fileName == "manifest.json") {
+				return snapshotFile(sn, snRoot, manifestFolder, path)
+			}
+
+			return nil
+		})
 		require.NoError(t, err)
 	})
 
@@ -195,7 +211,8 @@ func Test_CLI_Aspire_DetectGen(t *testing.T) {
 			}
 
 			parentDir := filepath.Base(filepath.Dir(path))
-			if !d.IsDir() && parentDir == "infra" || parentDir == "manifests" {
+			fileExt := filepath.Ext(path)
+			if !d.IsDir() && parentDir == "infra" || parentDir == "manifests" || fileExt == ".bicep" {
 				return snapshotFile(sn, snRoot, dir, path)
 			}
 
@@ -207,6 +224,7 @@ func Test_CLI_Aspire_DetectGen(t *testing.T) {
 
 // Test_CLI_Aspire_Deploy tests the full deployment of an Aspire project.
 func Test_CLI_Aspire_Deploy(t *testing.T) {
+	t.Skip("depends on new aspire release")
 	if cfg.CI && os.Getenv("AZURE_RECORD_MODE") != "live" {
 		t.Skip("skipping live test")
 	}

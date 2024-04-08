@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,11 +36,18 @@ type DotNetImporter struct {
 	// operation and it is expensive to generate. We should consider if this is the correct location for the cache or if
 	// it should be in some higher level component. Right now the lifetime issues are not too large of a deal, since
 	// `azd` processes are short lived.
-	cache   map[string]*apphost.Manifest
+	cache   map[manifestCacheKey]*apphost.Manifest
 	cacheMu sync.Mutex
 
 	hostCheck   map[string]hostCheckResult
 	hostCheckMu sync.Mutex
+}
+
+// manifestCacheKey is the key we use when caching manifests. It is a combination of the project path and the
+// DOTNET_ENVIRONMENT value (which can influence manifest generation)
+type manifestCacheKey struct {
+	projectPath       string
+	dotnetEnvironment string
 }
 
 func NewDotNetImporter(
@@ -55,7 +61,7 @@ func NewDotNetImporter(
 		console:        console,
 		lazyEnv:        lazyEnv,
 		lazyEnvManager: lazyEnvManager,
-		cache:          make(map[string]*apphost.Manifest),
+		cache:          make(map[manifestCacheKey]*apphost.Manifest),
 		hostCheck:      make(map[string]hostCheckResult),
 	}
 }
@@ -89,7 +95,7 @@ func (ai *DotNetImporter) CanImport(ctx context.Context, projectPath string) (bo
 }
 
 func (ai *DotNetImporter) ProjectInfrastructure(ctx context.Context, svcConfig *ServiceConfig) (*Infra, error) {
-	manifest, err := ai.readManifest(ctx, svcConfig)
+	manifest, err := ai.ReadManifest(ctx, svcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("generating app host manifest: %w", err)
 	}
@@ -97,11 +103,6 @@ func (ai *DotNetImporter) ProjectInfrastructure(ctx context.Context, svcConfig *
 	files, err := apphost.BicepTemplate(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("generating bicep from manifest: %w", err)
-	}
-
-	inputs, err := apphost.Inputs(manifest)
-	if err != nil {
-		return nil, fmt.Errorf("getting inputs from manifest: %w", err)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "azd-infra")
@@ -140,9 +141,25 @@ func (ai *DotNetImporter) ProjectInfrastructure(ctx context.Context, svcConfig *
 			Path:     tmpDir,
 			Module:   DefaultModule,
 		},
-		Inputs:     inputs,
 		cleanupDir: tmpDir,
 	}, nil
+}
+
+// mapToStringSlice converts a map of strings to a slice of strings.
+// Each key-value pair in the map is converted to a string in the format "key:value",
+// where the separator is specified by the `separator` parameter.
+// If the value is an empty string, only the key is included in the resulting slice.
+// The resulting slice is returned.
+func mapToStringSlice(m map[string]string, separator string) []string {
+	var result []string
+	for key, value := range m {
+		if value == "" {
+			result = append(result, key)
+		} else {
+			result = append(result, key+separator+value)
+		}
+	}
+	return result
 }
 
 func (ai *DotNetImporter) Services(
@@ -150,7 +167,7 @@ func (ai *DotNetImporter) Services(
 ) (map[string]*ServiceConfig, error) {
 	services := make(map[string]*ServiceConfig)
 
-	manifest, err := ai.readManifest(ctx, svcConfig)
+	manifest, err := ai.ReadManifest(ctx, svcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("generating app host manifest: %w", err)
 	}
@@ -200,8 +217,9 @@ func (ai *DotNetImporter) Services(
 			Language:     ServiceLanguageDocker,
 			Host:         DotNetContainerAppTarget,
 			Docker: DockerProjectOptions{
-				Path:    dockerfile.Path,
-				Context: dockerfile.Context,
+				Path:      dockerfile.Path,
+				Context:   dockerfile.Context,
+				BuildArgs: mapToStringSlice(dockerfile.BuildArgs, "="),
 			},
 		}
 
@@ -228,7 +246,7 @@ func (ai *DotNetImporter) Services(
 func (ai *DotNetImporter) SynthAllInfrastructure(
 	ctx context.Context, p *ProjectConfig, svcConfig *ServiceConfig,
 ) (fs.FS, error) {
-	manifest, err := ai.readManifest(ctx, svcConfig)
+	manifest, err := ai.ReadManifest(ctx, svcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("generating apphost manifest: %w", err)
 	}
@@ -316,82 +334,33 @@ func (ai *DotNetImporter) SynthAllInfrastructure(
 	return generatedFS, nil
 }
 
-// readManifest reads the manifest for the given app host service, and caches the result. It also reads the value of
-// the `services.<name>.config.exposedServices` property from the environment and sets the `External` property on
-// each binding for the exposed services. If this key does not exist in the config for the environment, the user
-// is prompted to select which services should be exposed. This can happen after an environment is created with
-// `azd env new`.
-func (ai *DotNetImporter) readManifest(ctx context.Context, svcConfig *ServiceConfig) (*apphost.Manifest, error) {
+// ReadManifest reads the manifest for the given app host service, and caches the result.
+func (ai *DotNetImporter) ReadManifest(ctx context.Context, svcConfig *ServiceConfig) (*apphost.Manifest, error) {
 	ai.cacheMu.Lock()
 	defer ai.cacheMu.Unlock()
 
-	if cached, has := ai.cache[svcConfig.Path()]; has {
+	var dotnetEnv string
+
+	if env, err := ai.lazyEnv.GetValue(); err == nil {
+		dotnetEnv = env.Getenv("DOTNET_ENVIRONMENT")
+	}
+
+	cacheKey := manifestCacheKey{
+		projectPath:       svcConfig.Path(),
+		dotnetEnvironment: dotnetEnv,
+	}
+
+	if cached, has := ai.cache[cacheKey]; has {
 		return cached, nil
 	}
 
 	ai.console.ShowSpinner(ctx, "Analyzing Aspire Application (this might take a moment...)", input.Step)
-	manifest, err := apphost.ManifestFromAppHost(ctx, svcConfig.Path(), ai.dotnetCli)
+	manifest, err := apphost.ManifestFromAppHost(ctx, svcConfig.Path(), ai.dotnetCli, dotnetEnv)
 	ai.console.StopSpinner(ctx, "", input.Step)
 	if err != nil {
 		return nil, err
 	}
 
-	env, err := ai.lazyEnv.GetValue()
-	if err == nil {
-		if cfgValue, has := env.Config.Get(fmt.Sprintf("services.%s.config.exposedServices", svcConfig.Name)); has {
-			if exposedServices, is := cfgValue.([]interface{}); !is {
-				log.Printf("services.%s.config.exposedServices is not an array, ignoring setting.", svcConfig.Name)
-			} else {
-				for idx, name := range exposedServices {
-					if strName, ok := name.(string); !ok {
-						log.Printf("services.%s.config.exposedServices[%d] is not a string, ignoring value.",
-							svcConfig.Name, idx)
-					} else {
-						// This can happen if the user has removed a service from their app host that they previously
-						// had and had exposed (or changed the service such that it no longer has any bindings).
-						if binding, has := manifest.Resources[strName]; !has || binding.Bindings == nil {
-							log.Printf("service %s does not exist or has no bindings, ignoring value.", strName)
-							continue
-						}
-
-						for _, binding := range manifest.Resources[strName].Bindings {
-							binding.External = true
-						}
-					}
-				}
-			}
-		} else {
-			selector := apphost.NewIngressSelector(manifest, ai.console)
-			exposed, err := selector.SelectPublicServices(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("selecting public services: %w", err)
-			}
-
-			for _, name := range exposed {
-				for _, binding := range manifest.Resources[name].Bindings {
-					binding.External = true
-				}
-			}
-
-			err = env.Config.Set(fmt.Sprintf("services.%s.config.exposedServices", svcConfig.Name), exposed)
-			if err != nil {
-				return nil, err
-			}
-
-			envManager, err := ai.lazyEnvManager.GetValue()
-			if err != nil {
-				return nil, err
-			}
-
-			if err := envManager.Save(ctx, env); err != nil {
-				return nil, err
-			}
-
-		}
-	} else {
-		log.Printf("unexpected error fetching environment: %s, exposed services may not be correct", err)
-	}
-
-	ai.cache[svcConfig.Path()] = manifest
+	ai.cache[cacheKey] = manifest
 	return manifest, nil
 }

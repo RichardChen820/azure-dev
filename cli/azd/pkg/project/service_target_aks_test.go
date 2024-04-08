@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v2"
 	"github.com/azure/azure-dev/cli/azd/pkg/alpha"
 	"github.com/azure/azure-dev/cli/azd/pkg/async"
+	"github.com/azure/azure-dev/cli/azd/pkg/cloud"
 	"github.com/azure/azure-dev/cli/azd/pkg/config"
 	"github.com/azure/azure-dev/cli/azd/pkg/convert"
 	"github.com/azure/azure-dev/cli/azd/pkg/environment"
@@ -283,11 +284,7 @@ func Test_Deploy_Helm(t *testing.T) {
 	require.NoError(t, err)
 
 	packageResult := &ServicePackageResult{
-		PackagePath: "test-app/api-test:azd-deploy-0",
-		Details: &dockerPackageResult{
-			ImageHash:   "IMAGE_HASH",
-			TargetImage: "test-app/api-test:azd-deploy-0",
-		},
+		PackagePath: "",
 	}
 
 	scope := environment.NewTargetResource("SUB_ID", "RG_ID", "", string(infra.AzureResourceTypeManagedCluster))
@@ -349,11 +346,7 @@ func Test_Deploy_Kustomize(t *testing.T) {
 	require.NoError(t, err)
 
 	packageResult := &ServicePackageResult{
-		PackagePath: "test-app/api-test:azd-deploy-0",
-		Details: &dockerPackageResult{
-			ImageHash:   "IMAGE_HASH",
-			TargetImage: "test-app/api-test:azd-deploy-0",
-		},
+		PackagePath: "",
 	}
 
 	scope := environment.NewTargetResource("SUB_ID", "RG_ID", "", string(infra.AzureResourceTypeManagedCluster))
@@ -831,9 +824,21 @@ func createAksServiceTarget(
 		On("GetTargetResource", *mockContext.Context, "SUBSCRIPTION_ID", serviceConfig).
 		Return(targetResource, nil)
 
-	managedClustersService := azcli.NewManagedClustersService(credentialProvider, mockContext.HttpClient)
-	containerRegistryService := azcli.NewContainerRegistryService(credentialProvider, mockContext.HttpClient, dockerCli)
-	containerHelper := NewContainerHelper(env, envManager, clock.NewMock(), containerRegistryService, dockerCli)
+	managedClustersService := azcli.NewManagedClustersService(credentialProvider, mockContext.ArmClientOptions)
+	containerRegistryService := azcli.NewContainerRegistryService(
+		credentialProvider,
+		dockerCli,
+		mockContext.ArmClientOptions,
+		mockContext.CoreClientOptions,
+	)
+	containerHelper := NewContainerHelper(
+		env,
+		envManager,
+		clock.NewMock(),
+		containerRegistryService,
+		dockerCli,
+		cloud.AzurePublic(),
+	)
 
 	if userConfig == nil {
 		userConfig = config.NewConfig(nil)

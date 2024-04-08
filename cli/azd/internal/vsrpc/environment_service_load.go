@@ -6,10 +6,8 @@ package vsrpc
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
-	"github.com/azure/azure-dev/cli/azd/pkg/apphost"
 	"github.com/azure/azure-dev/cli/azd/pkg/environment"
 	"github.com/azure/azure-dev/cli/azd/pkg/environment/azdcontext"
 	"github.com/azure/azure-dev/cli/azd/pkg/project"
@@ -64,10 +62,11 @@ func (s *environmentService) loadEnvironmentAsync(
 	ctx context.Context, container *container, name string, mustLoadServices bool,
 ) (*Environment, error) {
 	var c struct {
-		azdCtx        *azdcontext.AzdContext `container:"type"`
-		envManager    environment.Manager    `container:"type"`
-		projectConfig *project.ProjectConfig `container:"type"`
-		dotnetCli     dotnet.DotNetCli       `container:"type"`
+		azdCtx         *azdcontext.AzdContext  `container:"type"`
+		envManager     environment.Manager     `container:"type"`
+		projectConfig  *project.ProjectConfig  `container:"type"`
+		dotnetCli      dotnet.DotNetCli        `container:"type"`
+		dotnetImporter *project.DotNetImporter `container:"type"`
 	}
 
 	if err := container.Fill(&c); err != nil {
@@ -87,11 +86,11 @@ func (s *environmentService) loadEnvironmentAsync(
 	ret := &Environment{
 		Name: name,
 		Properties: map[string]string{
-			"Subscription":       e.GetSubscriptionId(),
-			"Location":           e.GetLocation(),
-			"ASPIRE_ENVIRONMENT": e.Getenv("ASPIRE_ENVIRONMENT"),
+			"Subscription": e.GetSubscriptionId(),
+			"Location":     e.GetLocation(),
 		},
 		IsCurrent: name == currentEnv,
+		Values:    e.Dotenv(),
 	}
 
 	// NOTE(ellismg): The IaC for Aspire Apps exposes these properties - we use them instead of trying to discover the
@@ -123,33 +122,12 @@ func (s *environmentService) loadEnvironmentAsync(
 		return nil, fmt.Errorf("failed to find Aspire app host: %w", err)
 	}
 
-	manifest, err := apphost.ManifestFromAppHost(ctx, appHost.Path(), c.dotnetCli)
+	manifest, err := c.dotnetImporter.ReadManifest(ctx, appHost)
 	if err != nil {
 		return nil, fmt.Errorf("reading app host manifest: %w", err)
 	}
 
 	ret.Services = servicesFromManifest(manifest)
-
-	var exposedServices []string
-
-	// TODO(azure/azure-dev#3284): We need to use the service name of the apphost from azure.yaml instead of assuming
-	// it will always be "app". "app" is just the default we use when creating an azure.yaml for the user.
-	val, has := e.Config.Get("services.app.config.exposedServices")
-	if has {
-		if v, ok := val.([]any); ok {
-			for _, svc := range v {
-				if s, ok := svc.(string); ok {
-					exposedServices = append(exposedServices, s)
-				}
-			}
-		}
-	}
-
-	for _, svc := range ret.Services {
-		if slices.Contains(exposedServices, svc.Name) {
-			svc.IsExternal = true
-		}
-	}
 
 	return ret, nil
 }

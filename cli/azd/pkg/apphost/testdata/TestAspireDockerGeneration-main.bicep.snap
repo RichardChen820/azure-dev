@@ -9,9 +9,13 @@ param environmentName string
 @description('The location used for all deployed resources')
 param location string
 
+@metadata({azd: {
+  type: 'generate'
+  config: {length:20,noLower:true,minNumeric:5,minSpecial:5}
+  }
+})
 @secure()
-@metadata({azd: {type: 'inputs' }})
-param inputs object
+param mysqlabstract_password string
 
 var tags = {
   'azd-env-name': environmentName
@@ -29,11 +33,12 @@ module resources 'resources.bicep' = {
   params: {
     location: location
     tags: tags
-    inputs: inputs
+    mysqlabstract_password: mysqlabstract_password
   }
 }
 
 output MANAGED_IDENTITY_CLIENT_ID string = resources.outputs.MANAGED_IDENTITY_CLIENT_ID
+output MANAGED_IDENTITY_NAME string = resources.outputs.MANAGED_IDENTITY_NAME
 output AZURE_LOG_ANALYTICS_WORKSPACE_NAME string = resources.outputs.AZURE_LOG_ANALYTICS_WORKSPACE_NAME
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = resources.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT
 output AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID string = resources.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID

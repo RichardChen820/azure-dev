@@ -22,7 +22,7 @@ import (
 	"github.com/azure/azure-dev/cli/azd/pkg/cosmosdb"
 	"github.com/azure/azure-dev/cli/azd/pkg/environment"
 	"github.com/azure/azure-dev/cli/azd/pkg/infra"
-	"github.com/azure/azure-dev/cli/azd/pkg/password"
+	"github.com/azure/azure-dev/cli/azd/pkg/keyvault"
 	"github.com/azure/azure-dev/cli/azd/pkg/sqldb"
 	"github.com/azure/azure-dev/cli/azd/pkg/tools"
 	"github.com/azure/azure-dev/cli/azd/pkg/tools/dotnet"
@@ -36,6 +36,7 @@ type dotnetContainerAppTarget struct {
 	dotNetCli           dotnet.DotNetCli
 	cosmosDbService     cosmosdb.CosmosDbService
 	sqlDbService        sqldb.SqlDbService
+	keyvaultService     keyvault.KeyVaultService
 }
 
 // NewDotNetContainerAppTarget creates the Service Target for a Container App that is written in .NET. Unlike
@@ -54,6 +55,7 @@ func NewDotNetContainerAppTarget(
 	dotNetCli dotnet.DotNetCli,
 	cosmosDbService cosmosdb.CosmosDbService,
 	sqlDbService sqldb.SqlDbService,
+	keyvaultService keyvault.KeyVaultService,
 ) ServiceTarget {
 	return &dotnetContainerAppTarget{
 		env:                 env,
@@ -63,6 +65,7 @@ func NewDotNetContainerAppTarget(
 		dotNetCli:           dotNetCli,
 		cosmosDbService:     cosmosDbService,
 		sqlDbService:        sqlDbService,
+		keyvaultService:     keyvaultService,
 	}
 }
 
@@ -115,6 +118,7 @@ func (at *dotnetContainerAppTarget) Deploy(
 			task.SetProgress(NewServiceProgress("Pushing container image"))
 
 			var remoteImageName string
+			var portNumber int
 
 			if serviceConfig.Language == ServiceLanguageDocker {
 				containerDeployTask := at.containerHelper.Deploy(ctx, serviceConfig, packageOutput, targetResource, false)
@@ -130,10 +134,10 @@ func (at *dotnetContainerAppTarget) Deploy(
 			} else {
 				imageName := fmt.Sprintf("azd-deploy-%s-%d", serviceConfig.Name, time.Now().Unix())
 
-				err = at.dotNetCli.PublishContainer(
+				portNumber, err = at.dotNetCli.PublishContainer(
 					ctx,
 					serviceConfig.Path(),
-					"Debug",
+					"Release",
 					imageName,
 					dockerCreds.LoginServer,
 					dockerCreds.Username,
@@ -190,6 +194,7 @@ func (at *dotnetContainerAppTarget) Deploy(
 				cosmosDbService:     at.cosmosDbService,
 				sqlDbService:        at.sqlDbService,
 				env:                 at.env,
+				keyvaultService:     at.keyvaultService,
 			}
 
 			tmpl, err := template.New("containerApp.tmpl.yaml").
@@ -197,6 +202,19 @@ func (at *dotnetContainerAppTarget) Deploy(
 				Funcs(template.FuncMap{
 					"urlHost":          fns.UrlHost,
 					"connectionString": fns.ConnectionString,
+					"parameter":        fns.Parameter,
+					// securedParameter gets a parameter the same way as parameter, but supporting the securedParameter
+					// allows to update the logic of pulling secret parameters in the future, if azd changes the way it
+					// stores the parameter value.
+					"securedParameter": fns.Parameter,
+					"secretOutput":     fns.kvSecret,
+					"targetPortOrDefault": func(targetPortFromManifest int) int {
+						// portNumber is 0 for dockerfile.v0, so we use the targetPort from the manifest
+						if portNumber == 0 {
+							return targetPortFromManifest
+						}
+						return portNumber
+					},
 				}).
 				Parse(manifest)
 			if err != nil {
@@ -204,48 +222,8 @@ func (at *dotnetContainerAppTarget) Deploy(
 				return
 			}
 
-			requiredInputs, err := apphost.Inputs(serviceConfig.DotNetContainerApp.Manifest)
-			if err != nil {
-				task.SetError(fmt.Errorf("failed to get required inputs: %w", err))
-			}
-
-			wroteNewInput := false
-
-			for inputName, inputInfo := range requiredInputs {
-				inputConfigKey := fmt.Sprintf("inputs.%s", inputName)
-
-				if _, has := at.env.Config.GetString(inputConfigKey); !has {
-					// No value found, so we need to generate one, and store it in the config bag.
-					//
-					// TODO(ellismg): Today this dereference is safe because when loading a manifest we validate that every
-					// input has a generate block with a min length property.  We would like to relax this in Preview 3 to
-					// to support cases where this is not the case (and we'd prompt for the value).  When we do that, we'll
-					// need to audit these dereferences to check for nil.
-					val, err := password.FromAlphabet(password.LettersAndDigits, *inputInfo.Default.Generate.MinLength)
-					if err != nil {
-						task.SetError(fmt.Errorf("generating value for input %s: %w", inputName, err))
-						return
-
-					}
-
-					if err := at.env.Config.Set(inputConfigKey, val); err != nil {
-						task.SetError(fmt.Errorf("saving value for input %s: %w", inputName, err))
-						return
-					}
-
-					wroteNewInput = true
-				}
-			}
-
-			if wroteNewInput {
-				if err := at.containerHelper.envManager.Save(ctx, at.env); err != nil {
-					task.SetError(fmt.Errorf("saving environment: %w", err))
-					return
-				}
-			}
-
 			var inputs map[string]any
-
+			// inputs are auto-gen during provision and saved to env-config
 			if has, err := at.env.Config.GetSection("inputs", &inputs); err != nil {
 				task.SetError(fmt.Errorf("failed to get inputs section: %w", err))
 				return
@@ -358,6 +336,7 @@ type containerAppTemplateManifestFuncs struct {
 	cosmosDbService     cosmosdb.CosmosDbService
 	sqlDbService        sqldb.SqlDbService
 	env                 *environment.Environment
+	keyvaultService     keyvault.KeyVaultService
 }
 
 // UrlHost returns the Hostname (without the port) of the given string, or an error if the string is not a valid URL.
@@ -369,6 +348,18 @@ func (_ *containerAppTemplateManifestFuncs) UrlHost(s string) (string, error) {
 		return "", err
 	}
 	return u.Hostname(), nil
+}
+
+func (fns *containerAppTemplateManifestFuncs) Parameter(name string) (string, error) {
+	val, found := fns.env.Config.Get("infra.parameters." + name)
+	if !found {
+		return "", fmt.Errorf("parameter %s not found", name)
+	}
+	valString, ok := val.(string)
+	if !ok {
+		return "", fmt.Errorf("parameter %s is not a string", name)
+	}
+	return valString, nil
 }
 
 // ConnectionString returns the connection string for the given resource name. Presently, we only support resources of
@@ -536,13 +527,13 @@ func evalBindingRefWithParent(v string, parent *apphost.Resource, env *environme
 				"bindings.<binding-name>.<property> but was: %s", v)
 		}
 
-		binding := *parent.Bindings[bindParts[0]]
+		binding, _ := parent.Bindings.Get(bindParts[0])
 		switch bindParts[1] {
 		case "host":
 			// The host name matches the containerapp name, so we can just return the resource name.
 			return resource, nil
-		case "port":
-			return fmt.Sprintf(`%d`, *binding.ContainerPort), nil
+		case "targetPort":
+			return fmt.Sprintf(`%d`, *binding.TargetPort), nil
 		case "url":
 			var urlFormatString string
 
@@ -613,4 +604,19 @@ func (fns *containerAppTemplateManifestFuncs) secretValue(containerAppName strin
 	}
 
 	return "", fmt.Errorf("secret %s not found", secretName)
+}
+
+// kvSecret gets the value of the secret with the given name from the KeyVault with the given host name. If the secret is
+// not found, an error is returned.
+func (fns *containerAppTemplateManifestFuncs) kvSecret(kvHost, secretName string) (string, error) {
+	hostName := fns.env.Getenv(kvHost)
+	if hostName == "" {
+		return "", fmt.Errorf("the value for %s was not found or is empty", kvHost)
+	}
+
+	secret, err := fns.keyvaultService.GetKeyVaultSecret(fns.ctx, fns.targetResource.SubscriptionId(), hostName, secretName)
+	if err != nil {
+		return "", fmt.Errorf("fetching secret %s from %s: %w", secretName, hostName, err)
+	}
+	return secret.Value, nil
 }

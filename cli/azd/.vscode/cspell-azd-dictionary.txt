@@ -23,6 +23,8 @@ armcognitiveservices
 armcosmos
 armresourcegraph
 armsql
+aspnet
+aspnetcore
 asyncmy
 asyncpg
 azapi
@@ -58,6 +60,7 @@ circleci
 cmdrecord
 cmdsubst
 cognitiveservices
+conditionalize
 consolesize
 containerapp
 containerapps
@@ -66,6 +69,7 @@ createdby
 csharpapp
 csharpapptest
 cupaloy
+custommaps
 deletedservices
 devcenter
 devcenters
@@ -125,6 +129,7 @@ nodeapp
 nolint
 notrail
 omitempty
+oneauth
 oneline
 opentelemetry
 ostest
@@ -135,6 +140,7 @@ otlp
 otlpconfig
 otlptrace
 otlptracehttp
+overriden
 paketobuildpacks
 pflag
 posix
@@ -169,6 +175,8 @@ sqlserver
 sstore
 staticcheck
 staticwebapp
+stdbool
+stdlib
 stdouttrace
 STRINGSLICE
 structs
@@ -185,10 +193,11 @@ Truef
 typeflag
 unhide
 unmarshaled
-upgrader
+unmarshalled
 unmarshalling
 unsetenvs
 unsets
+upgrader
 utsname
 vsrpc
 vuejs

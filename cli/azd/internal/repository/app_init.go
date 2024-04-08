@@ -88,7 +88,7 @@ func (i *Initializer) InitFromApp(
 			continue
 		}
 
-		manifest, err := apphost.ManifestFromAppHost(ctx, prj.Path, i.dotnetCli)
+		manifest, err := apphost.ManifestFromAppHost(ctx, prj.Path, i.dotnetCli, "")
 		if err != nil {
 			return fmt.Errorf("failed to generate manifest from app host project: %w", err)
 		}
@@ -196,27 +196,11 @@ func (i *Initializer) InitFromApp(
 			return err
 		}
 
-		// Figure out what services to expose.
-		ingressSelector := apphost.NewIngressSelector(appHostManifests[appHost.Path], i.console)
-		tracing.SetUsageAttributes(fields.AppInitLastStep.String("modify"))
-
-		exposed, err := ingressSelector.SelectPublicServices(ctx)
-		if err != nil {
-			return err
-		}
-
 		tracing.SetUsageAttributes(fields.AppInitLastStep.String("config"))
 
 		// Prompt for environment before proceeding with generation
 		newEnv, err := initializeEnv()
 		if err != nil {
-			return err
-		}
-
-		// Persist the configuration of the exposed services, as the user picked above. We know that the name
-		// of the generated import (in azure.yaml) is "app" by construction, since we are creating the user's azure.yaml
-		// during init.
-		if err := newEnv.Config.Set("services.app.config.exposedServices", exposed); err != nil {
 			return err
 		}
 		envManager, err := i.lazyEnvManager.GetValue()

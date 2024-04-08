@@ -65,42 +65,47 @@ func Test_AlphaUpperSnake(t *testing.T) {
 	}
 }
 
-func Test_ToDotNotation(t *testing.T) {
+func Test_EnvFormat(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
 		expected string
 	}{
 		{
-			name:     "valid input",
-			input:    "${inputs['my-input']['myinput']}",
-			expected: "inputs['my-input'].myinput",
+			name:     "no uppercase letters",
+			input:    "myenv",
+			expected: "${AZURE_MYENV}",
 		},
 		{
-			name:     "non inputs",
-			input:    "my-input",
-			expected: "'my-input'",
+			name:     "single uppercase letter",
+			input:    "myEnv",
+			expected: "${AZURE_MY_ENV}",
 		},
 		{
-			name:     "input with hyphen",
-			input:    "${inputs['my-input-with-hyphen']['other-foo']}",
-			expected: "inputs['my-input-with-hyphen']['other-foo']",
+			name:     "multiple uppercase letters",
+			input:    "myEnvFormat",
+			expected: "${AZURE_MY_ENV_FORMAT}",
 		},
 		{
-			name:     "input with hyphen 2",
-			input:    "${inputs['my']['other-foo']}",
-			expected: "inputs.my['other-foo']",
+			name:     "uppercase letters at the beginning",
+			input:    "EnvFormat",
+			expected: "${AZURE_ENV_FORMAT}",
 		},
 		{
-			name:     "input with multiple levels",
-			input:    "${inputs['level1']['level2']}",
-			expected: "inputs.level1.level2",
+			name:     "uppercase letters at the end",
+			input:    "envFormaT",
+			expected: "${AZURE_ENV_FORMA_T}",
+		},
+		{
+			name:     "uppercase letters in the middle",
+			input:    "envFormatString",
+			expected: "${AZURE_ENV_FORMAT_STRING}",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actual := ToDotNotation(tt.input)
+			actual := EnvFormat(tt.input)
 			assert.Equal(t, tt.expected, actual)
 		})
 	}

@@ -18,18 +18,27 @@ type Environment struct {
 	IsCurrent      bool
 	Properties     map[string]string
 	Services       []*Service
+	Values         map[string]string
 	LastDeployment *DeploymentResult `json:",omitempty"`
+	Resources      []*Resource
+}
+
+type Resource struct {
+	Name string
+	Type string
+	Id   string
 }
 
 type EnvironmentInfo struct {
-	Name      string
-	IsCurrent bool
+	Name       string
+	IsCurrent  bool
+	DotEnvPath string
 }
 
 type Service struct {
 	Name       string
 	IsExternal bool
-	Kind       *string `json:",omitempty"`
+	Path       string
 	Endpoint   *string `json:",omitempty"`
 	ResourceId *string `json:",omitempty"`
 }
@@ -50,6 +59,17 @@ type ProgressMessage struct {
 	AdditionalInfoLink string
 }
 
+type InitializeServerOptions struct {
+	// When non nil, AuthenticationEndpoint is the endpoint to connect to for authentication. It is in the same form as
+	// expected by the AZD_AUTH_ENDPOINT environment variable. Note that both AuthenticationEndpoint and AuthenticationKey
+	// need to be set for external authentication to be used.
+	AuthenticationEndpoint *string `json:",omitempty"`
+	// When non nil, AuthenticationKey is the key to use for authenticating to the server. It is in the same form as
+	// expected by the AZD_AUTH_KEY environment variable. Note that both AuthenticationEndpoint and AuthenticationKey
+	// need to be set for external authentication to be used.
+	AuthenticationKey *string `json:",omitempty"`
+}
+
 func newInfoProgressMessage(message string) ProgressMessage {
 	return ProgressMessage{
 		Message:  message,
@@ -57,6 +77,22 @@ func newInfoProgressMessage(message string) ProgressMessage {
 		Time:     time.Now(),
 		Kind:     Logging,
 	}
+}
+
+func newImportantProgressMessage(message string) ProgressMessage {
+	return ProgressMessage{
+		Message:  message,
+		Severity: Info,
+		Time:     time.Now(),
+		Kind:     Important,
+	}
+}
+
+// WithMessage returns a new ProgressMessage with the given message and timestamp set to now.
+func (m ProgressMessage) WithMessage(message string) ProgressMessage {
+	m.Message = message
+	m.Time = time.Now()
+	return m
 }
 
 type MessageSeverity int

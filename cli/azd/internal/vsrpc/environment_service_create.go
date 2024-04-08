@@ -45,6 +45,18 @@ func (s *environmentService) CreateEnvironmentAsync(
 		return false, err
 	}
 
+	// We had thought at one point that we would introduce `ASPIRE_ENVIRONMENT` as a sibling to `ASPNETCORE_ENVIRONMENT` and
+	// `DOTNET_ENVIRONMENT` and was aspire specific. We no longer intend to do this (because having both DOTNET and
+	// ASPNETCORE versions is already confusing enough). For now, we'll use `ASPIRE_ENVIRONMENT` to seed the initial values of
+	// `DOTNET_ENVIRONMENT`, but allow them to be overriden at environment construction time.
+	//
+	// We only retain `DOTNET_ENVIRONMENT` in the .env file.
+	dotnetEnv := newEnv.Properties["ASPIRE_ENVIRONMENT"]
+
+	if v, has := newEnv.Values["DOTNET_ENVIRONMENT"]; has {
+		dotnetEnv = v
+	}
+
 	// If an azure.yaml doesn't already exist, we need to create one. Creating an environment implies initializing the
 	// azd project if it does not already exist.
 	if _, err := os.Stat(c.azdContext.ProjectPath()); errors.Is(err, fs.ErrNotExist) {
@@ -62,7 +74,7 @@ func (s *environmentService) CreateEnvironmentAsync(
 			return false, fmt.Errorf("multiple app host projects found under %s", c.azdContext.ProjectPath())
 		}
 
-		manifest, err := apphost.ManifestFromAppHost(ctx, hosts[0].Path, c.dotnetCli)
+		manifest, err := apphost.ManifestFromAppHost(ctx, hosts[0].Path, c.dotnetCli, dotnetEnv)
 		if err != nil {
 			return false, fmt.Errorf("reading app host manifest: %w", err)
 		}
@@ -72,7 +84,8 @@ func (s *environmentService) CreateEnvironmentAsync(
 			c.azdContext.ProjectDirectory(),
 			filepath.Base(c.azdContext.ProjectDirectory()),
 			manifest,
-			hosts[0].Path)
+			hosts[0].Path,
+		)
 		if err != nil {
 			return false, fmt.Errorf("generating project artifacts: %w", err)
 		}
@@ -92,18 +105,12 @@ func (s *environmentService) CreateEnvironmentAsync(
 		return false, fmt.Errorf("creating new environment: %w", err)
 	}
 
-	azdEnv.DotenvSet("ASPIRE_ENVIRONMENT", newEnv.Properties["ASPIRE_ENVIRONMENT"])
-
-	var servicesToExpose = make([]string, 0)
-
-	for _, svc := range newEnv.Services {
-		if svc.IsExternal {
-			servicesToExpose = append(servicesToExpose, svc.Name)
-		}
+	if dotnetEnv != "" {
+		azdEnv.DotenvSet("DOTNET_ENVIRONMENT", dotnetEnv)
 	}
 
-	if err := azdEnv.Config.Set("services.app.config.exposedServices", servicesToExpose); err != nil {
-		return false, fmt.Errorf("setting exposed services: %w", err)
+	for key, value := range newEnv.Values {
+		azdEnv.DotenvSet(key, value)
 	}
 
 	if err := c.envManager.Save(ctx, azdEnv); err != nil {
